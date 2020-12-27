@@ -1,16 +1,18 @@
 import React, { useState, useRef, useEffect } from "react";
+import ReactDOM from 'react-dom';
 import Map from "ol/Map";
 import View from "ol/View";
 import MultiPoint from "ol/geom/MultiPoint";
 import TileLayer from "ol/layer/Tile";
 import { Vector as VectorLayer } from "ol/layer";
-import { OSM, Vector as VectorSource } from "ol/source";
+import { OSM, Vector as VectorSource, XYZ } from "ol/source";
 import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
-import { Draw, Modify, Snap } from "ol/interaction";
+import { Draw, Modify} from "ol/interaction";
 import Overlay from "ol/Overlay";
 import GeoJSON from "ol/format/GeoJSON";
 import Feature from "ol/Feature";
 import { doubleClick } from "ol/events/condition";
+import Control from "ol/control/Control"
 
 export const MapComponent = () => {
   const mapElement = useRef();
@@ -18,9 +20,23 @@ export const MapComponent = () => {
 
   const [map, setMap] = useState();
   const [toolTipXY, setToolTipXY] = useState();
-  const [toolTipText, setToolTipText] = useState();
+  const [toolTipText, setToolTipText] = useState("");
   const [format, setFormat] = useState(new GeoJSON());
-  // const [source, setSource] = useState(new VectorSource());
+  const [source, setSource] = useState(new VectorSource());
+  const [toolActive, setToolActive] = useState(false);
+  const [modify, setModify] = useState(
+    new Modify({
+      deleteCondition: doubleClick,
+      source: source,
+    })
+  );
+  const [draw, setDraw] = useState(
+    new Draw({
+      source: source,
+      type: "Polygon",
+    })
+  );
+
 
   const makeRequest = async (feature) => {
     setToolTipXY(feature.getGeometry().getInteriorPoint().getCoordinates());
@@ -29,12 +45,12 @@ export const MapComponent = () => {
     let proj_feature = new Feature({
       geometry: projected_geometry,
     });
-    let obj = format.writeFeatures([proj_feature]);
+    let geojson = format.writeFeatures([proj_feature]);
     let response = await fetch(
       `http://gis01.rumap.ru/4898/areaStatistics?guid=93BC6341-B35E-4B34-9DFE-26796F64BBB7`,
       {
         method: "POST",
-        body: obj,
+        body: geojson,
       }
     );
 
@@ -43,11 +59,15 @@ export const MapComponent = () => {
   };
 
   const clearPolygon = () => {
-    // source.clear();
+    source.clear();
+    setToolTipText("");
+  };
+
+  const toggleTool = () => {
+    setToolActive(!toolActive);
   };
 
   useEffect(() => {
-    let source = new VectorSource();
     let vector = new VectorLayer({
       source: source,
       style: [
@@ -81,71 +101,82 @@ export const MapComponent = () => {
       ],
     });
 
-    let popup = new Overlay({
-      id: "Measure",
-      element: toolTip.current,
-    });
-
-    let draw = new Draw({
-      source: source,
-      type: "Polygon",
-    });
-
-    draw.on("drawstart", () => {
-      //source.clear();
-      setToolTipText("");
-    });
-
-    draw.on("drawend", (e) => {
-      makeRequest(e.feature);
-    });
-
-    let modify = new Modify({
-      deleteCondition: doubleClick,
-      source: source,
-    });
-
-    modify.on("modifyend", (e) => {
-      makeRequest(e.features.item(0));
-    });
-
     const initMap = new Map({
       target: mapElement.current,
       layers: [
+        // new TileLayer({
+        //   source: new OSM(),
+        // }),
         new TileLayer({
-          source: new OSM(),
+          source: new XYZ({
+            url:
+              'http://tile.digimap.ru/rumap/{z}/{x}/{y}.png?guid=93BC6341-B35E-4B34-9DFE-26796F64BBB7' 
+          }),
         }),
-        vector,
+        vector
       ],
       view: new View({
-        zoom: 4,
-        center: [0, 0],
+        zoom: 5, 
+        center:[0,0]
       }),
     });
 
-    initMap.addInteraction(draw);
-    initMap.addInteraction(modify);
-    initMap.addOverlay(popup);
-
     setMap(initMap);
-  }, []);
+  }, [source]);
 
   useEffect(() => {
-    if (!map) return
+    if (!map) return;
     let overlay = map.getOverlayById("Measure");
+    // if(!overlay) return;
     overlay.setPosition(toolTipXY);
-  }, [map, toolTipXY]);
+  }, [toolTipXY]);
+
+  useEffect(() => {
+    if (!map) return;
+
+    if (toolActive) {
+
+      let popup = new Overlay({
+        id: "Measure",
+        element: toolTip.current,
+      });
+
+      draw.on("drawstart", () => {
+        source.clear();
+        setToolTipText("");
+      });
+
+      draw.on("drawend", (e) => {
+        makeRequest(e.feature);
+      });
+
+      modify.on("modifyend", (e) => {
+        makeRequest(e.features.item(0));
+      });
+
+      map.addInteraction(draw);
+      map.addInteraction(modify);
+      map.addOverlay(popup);
+    } else {
+      clearPolygon();
+      map.removeInteraction(draw);
+      map.removeInteraction(modify);
+      setToolTipText("");
+    }
+  }, [toolActive]);
 
   return (
     <div
       ref={mapElement}
       style={{ height: "100vh", width: "100hv" }}
-      className="map-container"
     >
       <div ref={toolTip}>
-            {toolTipText}
-            <button onClick={clearPolygon}>х</button>
+        {toolTipText}
+        {toolTipText === "" ? null : (<button onClick={clearPolygon}>х</button>)}
       </div>
+      <button onClick={toggleTool}>
+        {!toolActive ? "Активировать" : "Деактивировать"}
+      </button>
     </div>
   );
 };
