@@ -8,18 +8,43 @@ import { OSM, Vector as VectorSource } from "ol/source";
 import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
 import { Draw, Modify, Snap } from "ol/interaction";
 import Overlay from "ol/Overlay";
-import { toLonLat } from "ol/proj";
 import GeoJSON from "ol/format/GeoJSON";
-import Feature from 'ol/Feature'
-
-const MapToolTip = (center, text) => {
-  return <div></div>;
-};
+import Feature from "ol/Feature";
+import { doubleClick } from "ol/events/condition";
 
 export const MapComponent = () => {
   const mapElement = useRef();
+  const toolTip = useRef();
 
   const [map, setMap] = useState();
+  const [toolTipXY, setToolTipXY] = useState();
+  const [toolTipText, setToolTipText] = useState();
+  const [format, setFormat] = useState(new GeoJSON());
+  // const [source, setSource] = useState(new VectorSource());
+
+  const makeRequest = async (feature) => {
+    setToolTipXY(feature.getGeometry().getInteriorPoint().getCoordinates());
+    let geom = feature.getGeometry();
+    let projected_geometry = geom.clone().transform("EPSG:3857", "EPSG:4326");
+    let proj_feature = new Feature({
+      geometry: projected_geometry,
+    });
+    let obj = format.writeFeatures([proj_feature]);
+    let response = await fetch(
+      `http://gis01.rumap.ru/4898/areaStatistics?guid=93BC6341-B35E-4B34-9DFE-26796F64BBB7`,
+      {
+        method: "POST",
+        body: obj,
+      }
+    );
+
+    let data = await response.json();
+    setToolTipText(data["population_rs"]);
+  };
+
+  const clearPolygon = () => {
+    // source.clear();
+  };
 
   useEffect(() => {
     let source = new VectorSource();
@@ -48,12 +73,17 @@ export const MapComponent = () => {
               color: "#ffcc33",
             }),
           }),
-          geometry: function (feature) {
-            var coordinates = feature.getGeometry().getCoordinates()[0];
+          geometry: (feature) => {
+            let coordinates = feature.getGeometry().getCoordinates()[0];
             return new MultiPoint(coordinates);
           },
         }),
       ],
+    });
+
+    let popup = new Overlay({
+      id: "Measure",
+      element: toolTip.current,
     });
 
     let draw = new Draw({
@@ -61,58 +91,23 @@ export const MapComponent = () => {
       type: "Polygon",
     });
 
-    draw.on("drawend", async (e) => {
-      let bbox = e.feature.getGeometry().getCoordinates();
-      console.log(bbox);
-      //let bbox = e.feature.getGeometry().getCoordinates()
-      console.log(bbox[0].map((point) => toLonLat(point)));
-      bbox = bbox[0].map((point) => toLonLat(point));
-      console.log(bbox)
-      // let response = await fetch (
-      //     console.log(`https://rumap.ru/?measureArea=${bbox.join(";")}`)
-      // )
-      // console.log(response.json())
-      let format = new GeoJSON({
-        // dataProjection:"EPSG:4326"
-      });
-      // let gj = new GeoJSON({
-      //   featureProjection: "EPSG:3857",
-      //   geometryName:'Polygon'
-      // })
-      let geom = e.feature.getGeometry();
-      geom.transform('EPSG:3857', 'EPSG:4326');
-      var feature = new Feature({
-        geometry: geom
-      });
-      
-      let obj = format.writeFeatures([feature]);
-      console.log(obj)
-      // console.log(JSON.stringify(obj));
+    draw.on("drawstart", () => {
+      //source.clear();
+      setToolTipText("");
+    });
 
-      // console.log(`http://gis01.rumap.ru/4898/areaStatistics?guid=93BC6341-B35E-4B34-9DFE-26796F64BBB7&geojson="${obj}"&spatialin=EPSG:3857`)
-
-      let response = await fetch(
-        `http://gis01.rumap.ru/4898/areaStatistics?guid=93BC6341-B35E-4B34-9DFE-26796F64BBB7&spatialin=EPSG:3857`,
-        {
-          method: "POST",
-          // cors:"no-cors",
-          body:obj
-        }
-      )
-
-      let data = await response.json()
-      console.log(data)
+    draw.on("drawend", (e) => {
+      makeRequest(e.feature);
     });
 
     let modify = new Modify({
+      deleteCondition: doubleClick,
       source: source,
     });
 
     modify.on("modifyend", (e) => {
-      console.log(e);
+      makeRequest(e.features.item(0));
     });
-
-    let snap = new Snap({ source: source });
 
     const initMap = new Map({
       target: mapElement.current,
@@ -129,17 +124,28 @@ export const MapComponent = () => {
     });
 
     initMap.addInteraction(draw);
-    initMap.addInteraction(snap);
     initMap.addInteraction(modify);
+    initMap.addOverlay(popup);
 
     setMap(initMap);
   }, []);
+
+  useEffect(() => {
+    if (!map) return
+    let overlay = map.getOverlayById("Measure");
+    overlay.setPosition(toolTipXY);
+  }, [map, toolTipXY]);
 
   return (
     <div
       ref={mapElement}
       style={{ height: "100vh", width: "100hv" }}
       className="map-container"
-    ></div>
+    >
+      <div ref={toolTip}>
+            {toolTipText}
+            <button onClick={clearPolygon}>х</button>
+      </div>
+    </div>
   );
 };
